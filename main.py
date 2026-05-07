@@ -19,7 +19,7 @@ from services.coaching.voice_pipeline import VoicePipeline, autoplay_audio
 from dotenv import load_dotenv
 import os
 
-load_dotenv()  # loads .env from project root
+load_dotenv(override=True)   # ✅ THIS FIXES YOUR ISSUE
 
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
