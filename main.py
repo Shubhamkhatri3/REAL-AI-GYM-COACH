@@ -29,15 +29,8 @@ if not api_key:
 from groq import Groq
 client = Groq(api_key=api_key)
 
-# How long to wait between forced reruns while the webcam is active.
-# The original code used 0.25s, which reruns the whole Streamlit script
-# 4x/second. That can race with aiortc/aioice's ICE negotiation and tear
-# down the peer connection mid-handshake, causing:
-#   AttributeError: 'NoneType' object has no attribute 'sendto'
-#   AttributeError: 'NoneType' object has no attribute 'call_exception_handler'
-# Slowing this down gives WebRTC more room to finish negotiating before
-# the next rerun disturbs the underlying event loop/socket.
-RERUN_INTERVAL_SECONDS = 1.0
+# How often the metrics/coach panel refreshes while the webcam is active.
+METRICS_REFRESH_SECONDS = 1
 
 
 def get_ice_servers():
@@ -115,6 +108,64 @@ def get_ice_servers():
         "to your secrets for a more reliable connection."
     )
     return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+
+def render_progress_metrics():
+    """Renders the sidebar Progress section from current session_state."""
+    exercise = st.session_state.get("exercise_type")
+    total_reps = st.session_state.get("reps")
+    current_set_reps = st.session_state.get("current_set_reps")
+    reps_per_set = st.session_state.get("reps_per_set")
+    sets_completed = st.session_state.get("sets_completed")
+    target_sets = st.session_state.get("target_sets")
+
+    st.subheader("Progress")
+
+    st.metric("Total Reps", f"{total_reps}")
+    st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
+    st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
+
+    st.divider()
+
+    if exercise == "Squats":
+        st.subheader("Squat Metrics")
+        st.metric("Knee Angle", f"{st.session_state.knee_angle}°")
+        st.metric("Back Angle", f"{st.session_state.back_angle}°")
+        st.metric("Depth Status", st.session_state.depth_status)
+
+    elif exercise == "Push-ups":
+        st.subheader("Push-up Metrics")
+        st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+        st.metric("Body Alignment", st.session_state.body_alignment)
+        st.metric("Hip Position", st.session_state.hip_status)
+
+    elif exercise == "Biceps Curls (Dumbbell)":
+        st.subheader("Curl Metrics")
+        st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+        st.metric("Shoulder Stability", st.session_state.shoulder_status)
+        st.metric("Swing Detection", st.session_state.swing_status)
+
+    elif exercise == "Shoulder Press":
+        st.subheader("Shoulder Press Metrics")
+        st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+        st.metric("Arm Extension", st.session_state.extension_status)
+        st.metric("Back Arch", st.session_state.back_arch_status)
+
+    elif exercise == "Lunges":
+        st.subheader("Lunge Metrics")
+        st.metric("Front Knee Angle", f"{st.session_state.front_knee_angle}°")
+        st.metric("Torso Angle", f"{st.session_state.torso_angle}°")
+        st.metric("Balance Status", st.session_state.balance_status)
+
+
+def render_coach_panel():
+    """Renders the live coach audio/feedback banner from current session_state."""
+    if st.session_state.get("audio_to_play"):
+        autoplay_audio(st.session_state.audio_to_play)
+
+    if st.session_state.get("coach_feedback"):
+        st.markdown("")
+        st.success(f"🤖 **Coach:** {st.session_state.coach_feedback}")
 
 
 def main():
@@ -218,60 +269,28 @@ def main():
         if workout_started:
             st.divider()
 
-            exercise = st.session_state.get("exercise_type")
-            total_reps = st.session_state.get("reps")
-            current_set_reps = st.session_state.get("current_set_reps")
-            reps_per_set = st.session_state.get("reps_per_set")
-            sets_completed = st.session_state.get("sets_completed")
-            target_sets = st.session_state.get("target_sets")
+            # Fragment: reruns on its own timer WITHOUT re-executing the
+            # rest of the script (and therefore without tearing down the
+            # webrtc_streamer component below).
+            @st.fragment(run_every=METRICS_REFRESH_SECONDS)
+            def _sidebar_progress_fragment():
+                render_progress_metrics()
 
-            st.subheader("Progress")
-
-            st.metric("Total Reps", f"{total_reps}")
-            st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
-            st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
-
-            st.divider()
-
-            if exercise == "Squats":
-                st.subheader("Squat Metrics")
-                st.metric("Knee Angle", f"{st.session_state.knee_angle}°")
-                st.metric("Back Angle", f"{st.session_state.back_angle}°")
-                st.metric("Depth Status", st.session_state.depth_status)
-
-            elif exercise == "Push-ups":
-                st.subheader("Push-up Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Body Alignment", st.session_state.body_alignment)
-                st.metric("Hip Position", st.session_state.hip_status)
-
-            elif exercise == "Biceps Curls (Dumbbell)":
-                st.subheader("Curl Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Shoulder Stability", st.session_state.shoulder_status)
-                st.metric("Swing Detection", st.session_state.swing_status)
-
-            elif exercise == "Shoulder Press":
-                st.subheader("Shoulder Press Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Arm Extension", st.session_state.extension_status)
-                st.metric("Back Arch", st.session_state.back_arch_status)
-
-            elif exercise == "Lunges":
-                st.subheader("Lunge Metrics")
-                st.metric("Front Knee Angle", f"{st.session_state.front_knee_angle}°")
-                st.metric("Torso Angle", f"{st.session_state.torso_angle}°")
-                st.metric("Balance Status", st.session_state.balance_status)
+            _sidebar_progress_fragment()
 
     st.title("AI REAL-TIME GYM COACH")
     st.markdown("#### Real-time pose detection with proactive AI voice coaching")
- 
-    if st.session_state.get("audio_to_play"):
-        autoplay_audio(st.session_state.audio_to_play)
 
-    if st.session_state.get("coach_feedback"):
-        st.markdown("")
-        st.success(f"🤖 **Coach:** {st.session_state.coach_feedback}")
+    if workout_started:
+        # Same idea as above: the coach banner/audio needs to refresh live,
+        # but must not trigger a full-script rerun.
+        @st.fragment(run_every=METRICS_REFRESH_SECONDS)
+        def _coach_panel_fragment():
+            render_coach_panel()
+
+        _coach_panel_fragment()
+    else:
+        render_coach_panel()
 
     if not workout_started:
         st.markdown(
@@ -295,6 +314,11 @@ def main():
             unsafe_allow_html=True,
         )
     else:
+        # Created exactly once per session (only re-created if the user
+        # clicks Start/End Workout, which naturally reruns the full script).
+        # It is NOT inside a fragment and NOT followed by st.rerun(), so
+        # the WebRTC peer connection and MediaPipe landmarker are no longer
+        # torn down and recreated every second.
         context = webrtc_streamer(
             key="exercise-analysis",
             mode=WebRtcMode.SENDRECV,
@@ -307,11 +331,14 @@ def main():
             async_processing=True
         )
 
-        sync_metrics_update(context)
-
         if context.state.playing:
-            time.sleep(RERUN_INTERVAL_SECONDS)
-            st.rerun()
+            # Fragment handles periodic metrics syncing in the background,
+            # independent of the webrtc component's lifecycle.
+            @st.fragment(run_every=METRICS_REFRESH_SECONDS)
+            def _metrics_sync_fragment():
+                sync_metrics_update(context)
+
+            _metrics_sync_fragment()
 
         inject_webrtc_styles()
 
