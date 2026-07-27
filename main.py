@@ -3,6 +3,7 @@ import os
 import time
 import requests
 import pandas as pd
+from dotenv import load_dotenv
 from services.auth.login_wall import render_login_wall
 from services.state.session_defaults import initial_session_defaults
 from services.config.workout_config import EXERCISE_OPTIONS
@@ -17,17 +18,7 @@ from services.coaching.llm import LLMCoach
 from services.coaching.tts import TextToSpeech
 from services.coaching.voice_pipeline import VoicePipeline, autoplay_audio
 
-from dotenv import load_dotenv
-import os
-
-load_dotenv(override=True)   # ✅ THIS FIXES YOUR ISSUE
-
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    raise RuntimeError("GROQ_API_KEY not set")
-
-from groq import Groq
-client = Groq(api_key=api_key)
+load_dotenv(override=True)
 
 # How often the metrics/coach panel refreshes while the webcam is active.
 METRICS_REFRESH_SECONDS = 1
@@ -199,7 +190,7 @@ def main():
     workout_started = st.session_state.get("workout_started", False)
     
     with st.sidebar:
-        st.title("🏋️‍♂️ Apna AI Coach")
+        st.title("🏋️ AI Coach")
 
         if st.session_state.username:
             st.caption(f"👤 Login as {st.session_state.username}")
