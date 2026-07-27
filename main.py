@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import time
+import requests
 import pandas as pd
 from services.auth.login_wall import render_login_wall
 from services.state.session_defaults import initial_session_defaults
@@ -28,7 +29,84 @@ if not api_key:
 from groq import Groq
 client = Groq(api_key=api_key)
 
-  
+
+def get_ice_servers():
+    """
+    Build the ICE server list for streamlit-webrtc.
+
+    Streamlit Cloud containers sit behind NAT/firewalls that block the
+    direct peer-to-peer UDP path that plain STUN relies on. Without a TURN
+    relay as a fallback, ICE negotiation fails and you get a stream of
+    'NoneType has no attribute sendto' errors when the camera tries to start.
+
+    Priority:
+      1. Twilio NTS TURN credentials (if TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN
+         are set as env vars or Streamlit secrets) — most reliable option.
+      2. Metered.ca free open-relay TURN (if METERED_TURN_USERNAME /
+         METERED_TURN_CREDENTIAL are set) — good for quick testing.
+      3. Public Google STUN only — will likely still fail on Streamlit Cloud,
+         but kept as a last-resort fallback so the app doesn't crash.
+    """
+
+    def _get_secret(key):
+        val = os.environ.get(key)
+        if val:
+            return val
+        if hasattr(st, "secrets") and key in st.secrets:
+            return st.secrets[key]
+        return None
+
+    # --- Option 1: Twilio ---
+    twilio_sid = _get_secret("TWILIO_ACCOUNT_SID")
+    twilio_token = _get_secret("TWILIO_AUTH_TOKEN")
+
+    if twilio_sid and twilio_token:
+        try:
+            resp = requests.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{twilio_sid}/Tokens.json",
+                auth=(twilio_sid, twilio_token),
+                timeout=5,
+            )
+            resp.raise_for_status()
+            ice_servers = resp.json().get("ice_servers")
+            if ice_servers:
+                return ice_servers
+        except Exception as e:
+            st.warning(f"Could not fetch Twilio TURN credentials, falling back. ({e})")
+
+    # --- Option 2: Metered.ca open relay ---
+    metered_user = _get_secret("METERED_TURN_USERNAME")
+    metered_cred = _get_secret("METERED_TURN_CREDENTIAL")
+
+    if metered_user and metered_cred:
+        return [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {
+                "urls": ["turn:global.relay.metered.ca:80"],
+                "username": metered_user,
+                "credential": metered_cred,
+            },
+            {
+                "urls": ["turn:global.relay.metered.ca:443"],
+                "username": metered_user,
+                "credential": metered_cred,
+            },
+            {
+                "urls": ["turn:global.relay.metered.ca:443?transport=tcp"],
+                "username": metered_user,
+                "credential": metered_cred,
+            },
+        ]
+
+    # --- Option 3: STUN only (fallback, may not work on Streamlit Cloud) ---
+    st.info(
+        "No TURN server configured — the camera connection may fail on "
+        "Streamlit Cloud. Add TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN or "
+        "METERED_TURN_USERNAME/METERED_TURN_CREDENTIAL to your secrets."
+    )
+    return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+
 def main():
     st.set_page_config(
         page_icon="🏋️‍♀️",
@@ -211,7 +289,7 @@ def main():
             key="exercise-analysis",
             mode=WebRtcMode.SENDRECV,
             video_processor_factory=VideoProcessorClass,
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            rtc_configuration={"iceServers": get_ice_servers()},
             media_stream_constraints={
                 "video": True,
                 "audio": False
