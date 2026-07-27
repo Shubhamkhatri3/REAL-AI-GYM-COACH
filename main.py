@@ -101,12 +101,8 @@ def get_ice_servers():
         ]
 
     # --- Option 3: STUN only (fallback, may fail intermittently) ---
-    st.info(
-        "No TURN server configured — the camera connection may fail "
-        "intermittently on Streamlit Cloud. Add TWILIO_ACCOUNT_SID/"
-        "TWILIO_AUTH_TOKEN or METERED_TURN_USERNAME/METERED_TURN_CREDENTIAL "
-        "to your secrets for a more reliable connection."
-    )
+    # (No TURN credentials found in secrets/env — silently falling back to
+    # STUN-only. See get_ice_servers() docstring for how to add TURN.)
     return [{"urls": ["stun:stun.l.google.com:19302"]}]
 
 
