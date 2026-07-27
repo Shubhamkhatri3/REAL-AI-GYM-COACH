@@ -29,23 +29,32 @@ if not api_key:
 from groq import Groq
 client = Groq(api_key=api_key)
 
+# How long to wait between forced reruns while the webcam is active.
+# The original code used 0.25s, which reruns the whole Streamlit script
+# 4x/second. That can race with aiortc/aioice's ICE negotiation and tear
+# down the peer connection mid-handshake, causing:
+#   AttributeError: 'NoneType' object has no attribute 'sendto'
+#   AttributeError: 'NoneType' object has no attribute 'call_exception_handler'
+# Slowing this down gives WebRTC more room to finish negotiating before
+# the next rerun disturbs the underlying event loop/socket.
+RERUN_INTERVAL_SECONDS = 1.0
+
 
 def get_ice_servers():
     """
     Build the ICE server list for streamlit-webrtc.
 
-    Streamlit Cloud containers sit behind NAT/firewalls that block the
+    Streamlit Cloud containers sit behind NAT/firewalls that can block the
     direct peer-to-peer UDP path that plain STUN relies on. Without a TURN
-    relay as a fallback, ICE negotiation fails and you get a stream of
-    'NoneType has no attribute sendto' errors when the camera tries to start.
+    relay as a fallback, ICE negotiation can fail intermittently.
 
     Priority:
       1. Twilio NTS TURN credentials (if TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN
          are set as env vars or Streamlit secrets) — most reliable option.
       2. Metered.ca free open-relay TURN (if METERED_TURN_USERNAME /
          METERED_TURN_CREDENTIAL are set) — good for quick testing.
-      3. Public Google STUN only — will likely still fail on Streamlit Cloud,
-         but kept as a last-resort fallback so the app doesn't crash.
+      3. Public Google STUN only — kept as a last-resort fallback so the
+         app doesn't crash, but may still fail intermittently.
     """
 
     def _get_secret(key):
@@ -98,11 +107,12 @@ def get_ice_servers():
             },
         ]
 
-    # --- Option 3: STUN only (fallback, may not work on Streamlit Cloud) ---
+    # --- Option 3: STUN only (fallback, may fail intermittently) ---
     st.info(
-        "No TURN server configured — the camera connection may fail on "
-        "Streamlit Cloud. Add TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN or "
-        "METERED_TURN_USERNAME/METERED_TURN_CREDENTIAL to your secrets."
+        "No TURN server configured — the camera connection may fail "
+        "intermittently on Streamlit Cloud. Add TWILIO_ACCOUNT_SID/"
+        "TWILIO_AUTH_TOKEN or METERED_TURN_USERNAME/METERED_TURN_CREDENTIAL "
+        "to your secrets for a more reliable connection."
     )
     return [{"urls": ["stun:stun.l.google.com:19302"]}]
 
@@ -300,7 +310,7 @@ def main():
         sync_metrics_update(context)
 
         if context.state.playing:
-            time.sleep(0.25)
+            time.sleep(RERUN_INTERVAL_SECONDS)
             st.rerun()
 
         inject_webrtc_styles()
